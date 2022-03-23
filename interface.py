@@ -29,6 +29,7 @@ class ModuleInterface:
 
         # LOW = 128kbit/s AAC, MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC,
         self.quality_parse = {
+            QualityEnum.MINIMUM: '128k',
             QualityEnum.LOW: '128k',
             QualityEnum.MEDIUM: '128k',
             QualityEnum.HIGH: '256k',
@@ -142,7 +143,7 @@ class ModuleInterface:
                 raise self.exception(f'Query type "{query_type.name}" is not supported!')
 
             name = i.get('name')
-            name += f' ({i.get("mix")})' if i.get("mix") else ''
+            name += f' ({i.get("mix_name")})' if i.get("mix_name") else ''
 
             additional.append(f'Exclusive') if i.get("exclusive") is True else None
 
@@ -217,14 +218,13 @@ class ModuleInterface:
         cache = {'data': {album_id: album_data}}
         for i, track in enumerate(tracks):
             # add the track numbers
-            track['track_number'] = i + 1
-            track['total_tracks'] = total_tracks
+            track['number'] = i + 1
             # add the modified track to the track_extra_kwargs
             cache['data'][track.get('id')] = track
 
         return AlbumInfo(
             name=album_data.get('name'),
-            release_year=album_data.get('date').get('released')[:4] if album_data.get('date') else None,
+            release_year=album_data.get('publish_date')[:4] if album_data.get('publish_date') else None,
             upc=album_data.get('upc'),
             cover_url=album_data.get('image').get('url'),
             artist=album_data.get('artists')[0].get('name'),
@@ -244,9 +244,9 @@ class ModuleInterface:
         album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
 
         track_name = track_data.get('name')
-        track_name += f' ({track_data.get("mix")})' if track_data.get("mix") else ''
+        track_name += f' ({track_data.get("mix_name")})' if track_data.get("mix_name") else ''
 
-        release_year = track_data.get('date').get('released')[:4] if track_data.get('date') else None
+        release_year = track_data.get('publish_date')[:4] if track_data.get('publish_date') else None
         genres = [track_data.get('genre').get('name')]
         # check if a second genre exists
         genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genres') else []
@@ -258,7 +258,7 @@ class ModuleInterface:
             upc=album_data.get('upc'),
             isrc=track_data.get('isrc'),
             genres=genres,
-            release_date=album_data.get('date').get('released') if album_data.get('date') else None,
+            release_date=track_data.get('publish_date'),
             copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
             extra_tags={
                 'BPM': track_data.get('bpm'),
@@ -286,7 +286,7 @@ class ModuleInterface:
             album_id=album_data.get('id'),
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
-            release_year=track_data.get('date').get('released')[:4] if track_data.get('date') else None,
+            release_year=release_year,
             bitrate=int(self.quality_parse[quality_tier][:3]),
             cover_url=track_data.get('release').get('image').get('uri'),
             tags=tags,

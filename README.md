@@ -83,7 +83,8 @@ loaded module. You'll find the configuration file here: `config/settings.json`
 * "lossless": same as high
 * "high": AAC 256 kbit/s
 * "medium": same as low
-* "low": AAC 128 kbit/s
+* "low": same as minimum
+* "minimum": AAC 128 kbit/s
 
 `main_resolution`: Beatport only supports 1400x1400px covers? So this setting is not working atm.
 
