@@ -12,7 +12,7 @@ module_information = ModuleInformation(
     service_name='Beatport',
     module_supported_modes=ModuleModes.download | ModuleModes.covers,
     session_settings={'username': '', 'password': ''},
-    session_storage_variables=['session'],
+    session_storage_variables=['session', 'access_token', 'expires'],
     netlocation_constant='beatport',
     url_decoding=ManualEnum.manual,
     test_url='https://www.beatport.com/track/darkside/10844269'
@@ -36,28 +36,40 @@ class ModuleInterface:
             QualityEnum.HIFI: '256k'
         }
 
-        # TODO: Remove the album_cache! Currently required, because get_album_info() needs a slug which cannot
-        #  be provided everytime
-        self.album_cache = {}
-
         self.session = BeatportApi()
-        session_cookie = module_controller.temporary_settings_controller.read('session')
-        if session_cookie:
+        session = {
+            'session': module_controller.temporary_settings_controller.read('session'),
+            'access_token': module_controller.temporary_settings_controller.read('access_token')
+        }
+
+        if session.get('session'):
             logging.debug(f'Beatport: session found, loading')
-            self.session.set_session(session_cookie)
+
+            self.session.set_session(session)
+
+            if not self.session.valid_token():
+                logging.debug(f'Beatport: access_token expired, getting a new one')
+                session['access_token'] = self.session.get_embed_token()
+
+                # saving new access_token in temporary and in the api session
+                self.session.set_session(session)
+                self.module_controller.temporary_settings_controller.set('access_token', session.get('access_token'))
 
             # make sure to get a new cookie if the old expired
             if not self.valid_account():
-                self.login(module_controller.module_settings.get('username'), module_controller.module_settings.get('password'))
+                self.login(module_controller.module_settings.get('username'),
+                           module_controller.module_settings.get('password'))
 
     def login(self, email: str, password: str):
         logging.debug(f'Beatport: no session found, login')
         session_cookie = self.session.auth(email, password)
+        access_token = self.session.get_embed_token()
         if not self.valid_account():
             # TODO: more precise error message
             raise self.exception('Username/Password is wrong or no active subscription!')
 
         self.module_controller.temporary_settings_controller.set('session', session_cookie)
+        self.module_controller.temporary_settings_controller.set('access_token', access_token)
 
     def valid_account(self):
         # get the subscription from the API and check if it's at least a "Link" subscription
@@ -77,7 +89,6 @@ class ModuleInterface:
 
         if len(components) == 3 or len(components) == 4:
             type_ = components[1]
-            media_slug = components[2]
             media_id = components[3]
         else:
             print(f'\tInvalid URL: {link}')
@@ -97,26 +108,24 @@ class ModuleInterface:
 
         return MediaIdentification(
             media_type=media_type,
-            media_id=media_id,
-            extra_kwargs={'slug': media_slug}
+            media_id=media_id
         )
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 20):
-        results = self.session.get_search_data(query)
+        results = self.session.get_search(query)
 
-        # TODO: support artist search, maybe BS4?
         name_parse = {
             'track': 'tracks',
             'album': 'releases',
             'playlist': 'charts',
-            'artist': 'tracks'
+            'artist': 'artists'
         }
 
         items = []
         for i in results.get(name_parse.get(query_type.name)):
             additional = []
             if query_type is DownloadTypeEnum.playlist:
-                artists = [i.get('dj_profile_name') if i.get('dj_profile_name') else 'Beatport']
+                artists = [i.get('person').get('owner_name') if i.get('person') else 'Beatport']
                 year = i.get('date').get('released')[:4] if i.get('date') else None
             elif query_type is DownloadTypeEnum.track:
                 artists = [a.get('name') for a in i.get('artists')]
@@ -126,6 +135,9 @@ class ModuleInterface:
             elif query_type is DownloadTypeEnum.album:
                 artists = [j.get('name') for j in i.get('artists')]
                 year = i.get('date').get('released')[:4] if i.get('date') else None
+            elif query_type is DownloadTypeEnum.artist:
+                artists = None
+                year = None
             else:
                 raise self.exception(f'Query type "{query_type.name}" is not supported!')
 
@@ -147,15 +159,14 @@ class ModuleInterface:
 
         return items
 
-    def get_playlist_info(self, playlist_id: str, slug: str) -> PlaylistInfo:
-        # TODO: get more metadata from session.get_chart()
-        playlist_data = self.session.get_chart(slug, playlist_id)
-        playlist_tracks = self.session.get_chart_tracks(slug, playlist_id)
+    def get_playlist_info(self, playlist_id: str) -> PlaylistInfo:
+        playlist_data = self.session.get_chart(playlist_id)
+        playlist_tracks = self.session.get_chart_tracks(playlist_id)
 
         cache = {'data': {}}
-        total_tracks = len(playlist_tracks)
+        total_tracks = len(playlist_tracks.get('results'))
 
-        for i, track in enumerate(playlist_tracks):
+        for i, track in enumerate(playlist_tracks.get('results')):
             # add the track numbers
             track['track_number'] = i + 1
             track['total_tracks'] = total_tracks
@@ -163,65 +174,62 @@ class ModuleInterface:
             cache['data'][track.get('id')] = track
 
         return PlaylistInfo(
-            name=playlist_data.get('title'),
-            creator='Beatport',
-            # TODO: don't assume
-            release_year=2022,
-            tracks=[t.get('id') for t in playlist_tracks],
-            cover_url=playlist_data.get('image'),
+            name=playlist_data.get('name'),
+            creator=playlist_data.get('person').get('owner_name') if playlist_data.get('person') else 'Beatport',
+            release_year=playlist_data.get('change_date')[:4] if playlist_data.get('change_date') else None,
+            tracks=[t.get('id') for t in playlist_tracks.get('results')],
+            cover_url=playlist_data.get('image').get('uri'),
             track_extra_kwargs=cache
         )
 
-    def get_artist_info(self, artist_id: str, get_credited_albums: bool, slug: str) -> ArtistInfo:
-        # TODO: get all albums not just the 20 first, use
-        #  https://www.beatport.com/api/slidables/latest-releases-for-artist/469376?page=3&per_page=10
-        artist_data = self.session.get_artist(slug, artist_id)
-        artist_releases = self.session.get_artist_releases(slug, artist_id)
+    def get_artist_info(self, artist_id: str, get_credited_albums: bool) -> ArtistInfo:
+        artist_data = self.session.get_artist(artist_id)
+        artist_tracks_data = self.session.get_artist_tracks(artist_id)
+
+        # now fetch all the found total_items
+        artist_tracks = artist_tracks_data.get('results')
+        total_tracks = artist_tracks_data.get('count')
+        for page in range(2, total_tracks // 100 + 2):
+            print(f'Fetching {page * 100}/{total_tracks}', end='\r')
+            artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get('results')
 
         return ArtistInfo(
-            name=artist_data.get('@name'),
-            albums=[a.get('id') for a in artist_releases.get('releases')],
-            album_extra_kwargs={'data': {a.get('id'): a for a in artist_releases.get('releases')}},
-            tracks=[t.get('id') for t in artist_releases.get('tracks')],
-            track_extra_kwargs={'data': {t.get('id'): t for t in artist_releases.get('tracks')}},
+            name=artist_data.get('name'),
+            tracks=[t.get('id') for t in artist_tracks],
+            track_extra_kwargs={'data': {t.get('id'): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, slug: str = None, data=None) -> AlbumInfo:
+    def get_album_info(self, album_id: str, data=None) -> AlbumInfo:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
 
-        if album_id in self.album_cache:
-            album_data = self.album_cache[album_id]
-            slug = album_data.get('slug')
-        elif album_id in data:
-            album_data = data[album_id]
-            slug = album_data.get('slug')
-        else:
-            album_data = self.session.get_release(slug, album_id)
+        album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
+        tracks_data = self.session.get_release_tracks(album_id)
 
-        cache = {'data': {}}
-        tracks_data = []
-        if slug:
-            tracks_data = self.session.get_release_tracks(slug, album_id)
+        # now fetch all the found total_items
+        tracks = tracks_data.get('results')
+        total_tracks = tracks_data.get('count')
+        for page in range(2, total_tracks // 100 + 2):
+            print(f'Fetching {page * 100}/{total_tracks}', end='\r')
+            tracks += self.session.get_release_tracks(album_id, page=page).get('results')
 
-            total_tracks = len(tracks_data)
-            for i, track in enumerate(tracks_data):
-                if 'Tracks' in track.get('component_type'):
-                    # add the track numbers
-                    track['track_number'] = i + 1
-                    track['total_tracks'] = total_tracks
-                    # add the modified track to the track_extra_kwargs
-                    cache['data'][track.get('id')] = track
+        cache = {'data': {album_id: album_data}}
+        for i, track in enumerate(tracks):
+            # add the track numbers
+            track['track_number'] = i + 1
+            track['total_tracks'] = total_tracks
+            # add the modified track to the track_extra_kwargs
+            cache['data'][track.get('id')] = track
 
         return AlbumInfo(
             name=album_data.get('name'),
             release_year=album_data.get('date').get('released')[:4] if album_data.get('date') else None,
-            upc=album_data.get('catalog'),
-            cover_url=album_data.get('images').get('large').get('url'),
+            upc=album_data.get('upc'),
+            cover_url=album_data.get('image').get('url'),
             artist=album_data.get('artists')[0].get('name'),
             artist_id=album_data.get('artists')[0].get('id'),
-            tracks=[t.get('id') for t in tracks_data],
+            tracks=[t.get('id') for t in tracks],
             track_extra_kwargs=cache
         )
 
@@ -230,27 +238,32 @@ class ModuleInterface:
         if data is None:
             data = {}
 
-        track_data = data[track_id] if track_id in data else self.session.get_track(slug, track_id)
-        album_data = self.session.get_release(track_data.get('release').get('slug'),
-                                              track_data.get('release').get('id'))
-        # TODO: Remove it, but it's still required
-        self.album_cache[track_data.get('release').get('id')] = album_data
+        track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+
+        album_id = track_data.get('release').get('id')
+        album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
 
         track_name = track_data.get('name')
         track_name += f' ({track_data.get("mix")})' if track_data.get("mix") else ''
 
         release_year = track_data.get('date').get('released')[:4] if track_data.get('date') else None
+        genres = [track_data.get('genre').get('name')]
+        # check if a second genre exists
+        genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genres') else []
 
-        # TODO: get the correct track_number from get_album_info()
         tags = Tags(
             album_artist=album_data.get('artists')[0].get('name'),
-            track_number=track_data.get('track_number') or 1,
-            total_tracks=track_data.get('total_tracks') or 1,
-            upc=album_data.get('catalog'),
-            genres=[g.get('name') for g in track_data.get('genres')] + [g.get('name') for g in
-                                                                        track_data.get('sub_genres')],
+            track_number=track_data.get('number'),
+            total_tracks=album_data.get('track_count'),
+            upc=album_data.get('upc'),
+            isrc=track_data.get('isrc'),
+            genres=genres,
             release_date=album_data.get('date').get('released') if album_data.get('date') else None,
-            copyright=f'© {release_year} {track_data.get("label").get("name")}'
+            copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
+            extra_tags={
+                'BPM': track_data.get('bpm'),
+                'Key': track_data.get('key').get('name')
+            }
         )
 
         # get the HLS playlist from the API
@@ -261,6 +274,12 @@ class ModuleInterface:
             # now get the wanted quality
             stream_url = stream_data.get('stream_url').replace('128k', self.quality_parse[quality_tier])
 
+        error = None
+        if not track_data['is_available_for_streaming']:
+            error = f'Track "{track_data.get("name")}" is not streamable!'
+        elif track_data.get('preorder'):
+            error = f'Track "{track_data.get("name")}" is not yet released!'
+
         track_info = TrackInfo(
             name=track_name,
             album=album_data.get('name'),
@@ -269,13 +288,11 @@ class ModuleInterface:
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=track_data.get('date').get('released')[:4] if track_data.get('date') else None,
             bitrate=int(self.quality_parse[quality_tier][:3]),
-            cover_url=track_data.get('images').get('large').get('url'),
-            explicit=track_data.get('explicit'),
+            cover_url=track_data.get('release').get('image').get('uri'),
             tags=tags,
             codec=CodecEnum.AAC,
             download_extra_kwargs={'stream_url': stream_url},
-            error=f'Track "{track_data.get("name")}" is not streamable!' if not track_data[
-                'is_available_for_streaming'] else None
+            error=error
         )
 
         return track_info
