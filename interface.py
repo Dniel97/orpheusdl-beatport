@@ -2,6 +2,7 @@ import logging
 import shutil
 import ffmpeg
 
+from datetime import datetime
 from urllib.parse import urlparse
 
 from utils.models import *
@@ -12,7 +13,7 @@ module_information = ModuleInformation(
     service_name='Beatport',
     module_supported_modes=ModuleModes.download | ModuleModes.covers,
     session_settings={'username': '', 'password': ''},
-    session_storage_variables=['session', 'access_token', 'expires'],
+    session_storage_variables=['access_token', 'refresh_token', 'expires'],
     netlocation_constant='beatport',
     url_decoding=ManualEnum.manual,
     test_url='https://www.beatport.com/track/darkside/10844269'
@@ -29,52 +30,53 @@ class ModuleInterface:
 
         # LOW = 128kbit/s AAC, MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC,
         self.quality_parse = {
-            QualityEnum.MINIMUM: '128k',
-            QualityEnum.LOW: '128k',
-            QualityEnum.MEDIUM: '128k',
-            QualityEnum.HIGH: '256k',
-            QualityEnum.LOSSLESS: '256k',
-            QualityEnum.HIFI: '256k'
+            QualityEnum.MINIMUM: 128,
+            QualityEnum.LOW: 128,
+            QualityEnum.MEDIUM: 128,
+            QualityEnum.HIGH: 256,
+            QualityEnum.LOSSLESS: 256,
+            QualityEnum.HIFI: 256
         }
 
         self.session = BeatportApi()
         session = {
-            'session': module_controller.temporary_settings_controller.read('session'),
-            'access_token': module_controller.temporary_settings_controller.read('access_token')
+            'access_token': module_controller.temporary_settings_controller.read('access_token'),
+            'refresh_token': module_controller.temporary_settings_controller.read('refresh_token'),
+            'expires': module_controller.temporary_settings_controller.read('expires')
         }
 
-        if session.get('session'):
-            logging.debug(f'Beatport: session found, loading')
+        self.session.set_session(session)
 
-            self.session.set_session(session)
+        if session['refresh_token'] is None:
+            # old beatport version with cookies and no refresh token, trigger login manually
+            self.login(module_controller.module_settings['username'], module_controller.module_settings['password'])
 
-            if not self.session.valid_token():
-                logging.debug(f'Beatport: access_token expired, getting a new one')
-                session['access_token'] = self.session.get_embed_token()
+        if session['refresh_token'] is not None and datetime.now() > session['expires']:
+            logging.debug(f'Beatport: access_token expired, getting a new one')
 
-                # saving new access_token in temporary and in the api session
-                self.session.set_session(session)
-                self.module_controller.temporary_settings_controller.set('access_token', session.get('access_token'))
+            # get a new access_token and refresh_token from the API
+            self.session.refresh()
 
-            # make sure to get a new cookie if the old expired
-            if not self.valid_account():
-                self.login(module_controller.module_settings.get('username'),
-                           module_controller.module_settings.get('password'))
-
+            # save the new access_token, refresh_token and expires in the temporary settings
+            self.module_controller.temporary_settings_controller.set('access_token', self.session.access_token)
+            self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
+            self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
+            
     def login(self, email: str, password: str):
         logging.debug(f'Beatport: no session found, login')
-        session_cookie = self.session.auth(email, password)
-        access_token = self.session.get_embed_token()
-        if not self.valid_account():
-            # TODO: more precise error message
-            raise self.exception('Username/Password is wrong or no active subscription!')
+        login_data = self.session.auth(email, password)
 
-        self.module_controller.temporary_settings_controller.set('session', session_cookie)
-        self.module_controller.temporary_settings_controller.set('access_token', access_token)
+        if login_data.get('error_description') is not None:
+            raise self.exception(login_data.get('error_description'))
+
+        # save the new access_token, refresh_token and expires in the temporary settings
+        self.module_controller.temporary_settings_controller.set('access_token', self.session.access_token)
+        self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
+        self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
 
     def valid_account(self):
         # get the subscription from the API and check if it's at least a "Link" subscription
-        account_data = self.session.get_account_subscription()
+        account_data = self.session.get_account()
         if account_data and 'link' in account_data.get('subscription'):
             return True
         return False
@@ -249,7 +251,7 @@ class ModuleInterface:
         release_year = track_data.get('publish_date')[:4] if track_data.get('publish_date') else None
         genres = [track_data.get('genre').get('name')]
         # check if a second genre exists
-        genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genres') else []
+        genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genre') else []
 
         tags = Tags(
             album_artist=album_data.get('artists')[0].get('name'),
@@ -266,14 +268,6 @@ class ModuleInterface:
             }
         )
 
-        # get the HLS playlist from the API
-        stream_data = self.session.get_stream(track_id)
-        stream_url = None
-        # check if a playlist got returned
-        if stream_data.get('stream_url'):
-            # now get the wanted quality
-            stream_url = stream_data.get('stream_url').replace('128k', self.quality_parse[quality_tier])
-
         error = None
         if not track_data['is_available_for_streaming']:
             error = f'Track "{track_data.get("name")}" is not streamable!'
@@ -287,27 +281,49 @@ class ModuleInterface:
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=release_year,
-            bitrate=int(self.quality_parse[quality_tier][:3]),
+            bitrate=self.quality_parse[quality_tier],
+            bit_depth=None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
             cover_url=track_data.get('release').get('image').get('uri'),
             tags=tags,
             codec=CodecEnum.AAC,
-            download_extra_kwargs={'stream_url': stream_url},
+            download_extra_kwargs={'track_id': track_id, 'quality_tier': quality_tier},
             error=error
         )
 
         return track_info
 
-    def get_track_download(self, stream_url: str = None) -> TrackDownloadInfo:
-        # HLS
-        temp_location = create_temp_filename() + '.mp4'
+    def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
+        if self.quality_parse[quality_tier] == 128:
+            # get the HLS 128k playlist from the API
+            stream_data = self.session.get_track_stream(track_id)
 
-        if not shutil.which("ffmpeg"):
-            raise self.exception('FFmpeg is not installed or working, but FFmpeg is required, exiting')
+            if not stream_data.get('stream_url'):
+                raise self.exception('Could not get 128k HLS stream, exiting')
 
-        ffmpeg.input(stream_url, hide_banner=None, y=None).output(temp_location, acodec='copy', loglevel='error').run()
+            # HLS
+            temp_location = create_temp_filename() + '.mp4'
 
-        # return the MP4 temp file, but tell orpheus to change the container to .m4a (AAC)
-        return TrackDownloadInfo(
-            download_type=DownloadEnum.TEMP_FILE_PATH,
-            temp_file_path=temp_location
-        )
+            if not shutil.which("ffmpeg"):
+                raise self.exception('FFmpeg is not installed or working, but FFmpeg is required, exiting')
+
+            ffmpeg.input(stream_data.get('stream_url'), hide_banner=None, y=None).output(temp_location, acodec='copy',
+                                                                                         loglevel='error').run()
+
+            # return the MP4 temp file, but tell orpheus to change the container to .m4a (AAC)
+            return TrackDownloadInfo(
+                download_type=DownloadEnum.TEMP_FILE_PATH,
+                temp_file_path=temp_location
+            )
+
+        elif self.quality_parse[quality_tier] == 256:
+            # get the MP4 256k from the API
+            stream_data = self.session.get_track_download(track_id)
+
+            if not stream_data.get('location'):
+                raise self.exception('Could not get 256k MP4 stream, exiting')
+
+            # return the MP4 URL
+            return TrackDownloadInfo(
+                download_type=DownloadEnum.URL,
+                file_url=stream_data.get('location')
+            )
