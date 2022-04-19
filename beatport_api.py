@@ -63,7 +63,7 @@ class BeatportApi:
 
     def set_session(self, session: dict):
         self.access_token = session.get('access_token')
-        self.access_token = session.get('access_token')
+        self.refresh_token = session.get('refresh_token')
         self.expires = session.get('expires')
 
     def get_session(self):
