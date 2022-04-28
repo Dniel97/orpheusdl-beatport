@@ -52,15 +52,24 @@ class ModuleInterface:
             self.login(module_controller.module_settings['username'], module_controller.module_settings['password'])
 
         if session['refresh_token'] is not None and datetime.now() > session['expires']:
-            logging.debug(f'Beatport: access_token expired, getting a new one')
+            # access token expired, get new refresh token
+            self.refresh_token()
 
-            # get a new access_token and refresh_token from the API
-            self.session.refresh()
+    def refresh_token(self):
+        logging.debug(f'Beatport: access_token expired, getting a new one')
 
-            # save the new access_token, refresh_token and expires in the temporary settings
-            self.module_controller.temporary_settings_controller.set('access_token', self.session.access_token)
-            self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
-            self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
+        # get a new access_token and refresh_token from the API
+        refresh_data = self.session.refresh()
+        if refresh_data and refresh_data.get('error') == 'invalid_grant':
+            # if the refresh token is invalid, trigger login
+            self.login(self.module_controller.module_settings['username'],
+                       self.module_controller.module_settings['password'])
+            return
+
+        # save the new access_token, refresh_token and expires in the temporary settings
+        self.module_controller.temporary_settings_controller.set('access_token', self.session.access_token)
+        self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
+        self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
             
     def login(self, email: str, password: str):
         logging.debug(f'Beatport: no session found, login')

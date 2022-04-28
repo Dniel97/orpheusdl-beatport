@@ -55,7 +55,7 @@ class BeatportApi:
         })
 
         if r.status_code != 200:
-            raise ConnectionError(r.text)
+            return r.json()
 
         self.access_token = r.json()['access_token']
         self.refresh_token = r.json()['refresh_token']
