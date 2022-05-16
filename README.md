@@ -41,9 +41,9 @@ Follow these steps to get a local copy of Orpheus up and running:
 
 ### Installation
 
-1. Clone the repo inside the folder `orpheusdl/modules/`
+1. Go to your `orpheusdl/` directory and run the following command:
    ```sh
-   git clone https://github.com/Dniel97/orpheusdl-beatport.git beatport
+   git clone https://github.com/Dniel97/orpheusdl-beatport.git modules/beatport
    ```
 2. Execute:
    ```sh
@@ -92,12 +92,17 @@ loaded module. You'll find the configuration file here: `config/settings.json`
 ```json
 {
     "username": "",
-    "password": "",
+    "password": ""
 }
 ```
-`username`: Enter your Beatport email/username address here
 
-`password`: Enter your Beatport password here
+| Option   | Info                                            |
+|----------|-------------------------------------------------|
+| username | Enter your Beatport email/username address here |
+| password | Enter your Beatport password here               |
+
+**NOTE: You need an active "LINK" subscription to use this module. "Professional", formerly known as "LINK Pro" is
+required to get  AAC 256 kbit/s?**
 
 <!-- Contact -->
 ## Contact

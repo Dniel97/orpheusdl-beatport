@@ -24,6 +24,7 @@ class ModuleInterface:
     # noinspection PyTypeChecker
     def __init__(self, module_controller: ModuleController):
         self.exception = module_controller.module_error
+        self.disable_subscription_check = module_controller.orpheus_options.disable_subscription_check
         self.oprinter = module_controller.printer_controller
         self.print = module_controller.printer_controller.oprint
         self.module_controller = module_controller
@@ -55,6 +56,8 @@ class ModuleInterface:
             # access token expired, get new refresh token
             self.refresh_token()
 
+        self.valid_account()
+
     def refresh_token(self):
         logging.debug(f'Beatport: access_token expired, getting a new one')
 
@@ -83,12 +86,14 @@ class ModuleInterface:
         self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
         self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
 
+        self.valid_account()
+
     def valid_account(self):
-        # get the subscription from the API and check if it's at least a "Link" subscription
-        account_data = self.session.get_account()
-        if account_data and 'link' in account_data.get('subscription'):
-            return True
-        return False
+        if not self.disable_subscription_check:
+            # get the subscription from the API and check if it's at least a "Link" subscription
+            account_data = self.session.get_account()
+            if not account_data.get('subscription'):
+                raise self.exception('Beatport: Account does not have an active "Link" subscription')
 
     @staticmethod
     def custom_url_parse(link: str):
