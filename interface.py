@@ -1,9 +1,9 @@
 import logging
+import re
 import shutil
 import ffmpeg
 
 from datetime import datetime
-from urllib.parse import urlparse
 
 from utils.models import *
 from utils.utils import create_temp_filename
@@ -97,35 +97,23 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        url = urlparse(link)
-        components = url.path.split('/')
+        match = re.search(r"https?://(www.)?beatport.com/(?P<type>track|release|artist|playlists|chart)/"
+                          r".+?/(?P<id>\d+)", link)
 
-        if not components or len(components) <= 2:
-            print(f'\tInvalid URL: {link}')
-            return
-
-        if len(components) == 3 or len(components) == 4:
-            type_ = components[1]
-            media_id = components[3]
-        else:
-            print(f'\tInvalid URL: {link}')
-            return
-
-        if type_ == 'track':
-            media_type = DownloadTypeEnum.track
-        elif type_ == 'release':
-            media_type = DownloadTypeEnum.album
-        elif type_ == 'chart':
-            media_type = DownloadTypeEnum.playlist
-        elif type_ == 'artist':
-            media_type = DownloadTypeEnum.artist
-        else:
-            print(f'\t{type_} not supported!')
-            return
+        # so parse the regex "match" to the actual DownloadTypeEnum
+        media_types = {
+            'track': DownloadTypeEnum.track,
+            'release': DownloadTypeEnum.album,
+            'artist': DownloadTypeEnum.artist,
+            'playlists': DownloadTypeEnum.playlist,
+            'chart': DownloadTypeEnum.playlist
+        }
 
         return MediaIdentification(
-            media_type=media_type,
-            media_id=media_id
+            media_type=media_types[match.group('type')],
+            media_id=match.group('id'),
+            # check if the playlist is a user playlist or DJ charts, only needed for get_playlist_info()
+            extra_kwargs={'is_chart': match.group('type') == 'chart'}
         )
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 20):
@@ -141,17 +129,19 @@ class ModuleInterface:
         items = []
         for i in results.get(name_parse.get(query_type.name)):
             additional = []
+            duration = None
             if query_type is DownloadTypeEnum.playlist:
                 artists = [i.get('person').get('owner_name') if i.get('person') else 'Beatport']
-                year = i.get('date').get('released')[:4] if i.get('date') else None
+                year = i.get('change_date')[:4] if i.get('change_date') else None
             elif query_type is DownloadTypeEnum.track:
                 artists = [a.get('name') for a in i.get('artists')]
-                year = i.get('date').get('released')[:4] if i.get('date') else None
+                year = i.get('publish_date')[:4] if i.get('publish_date') else None
 
-                additional.append(f'{i.get("bpm")}BPM - {i.get("key")}')
+                duration = i.get('length_ms') // 1000
+                additional.append(f'{i.get("bpm")}BPM')
             elif query_type is DownloadTypeEnum.album:
                 artists = [j.get('name') for j in i.get('artists')]
-                year = i.get('date').get('released')[:4] if i.get('date') else None
+                year = i.get('publish_date')[:4] if i.get('publish_date') else None
             elif query_type is DownloadTypeEnum.artist:
                 artists = None
                 year = None
@@ -167,6 +157,7 @@ class ModuleInterface:
                 name=name,
                 artists=artists,
                 year=year,
+                duration=duration,
                 result_id=i.get('id'),
                 additional=additional if additional != [] else None,
                 extra_kwargs={'data': {i.get('id'): i}}
@@ -176,30 +167,62 @@ class ModuleInterface:
 
         return items
 
-    def get_playlist_info(self, playlist_id: str) -> PlaylistInfo:
-        playlist_data = self.session.get_chart(playlist_id)
-        playlist_tracks = self.session.get_chart_tracks(playlist_id)
+    def get_playlist_info(self, playlist_id: str, is_chart: bool = False) -> PlaylistInfo:
+        # get the DJ chart or user playlist
+        if is_chart:
+            playlist_data = self.session.get_chart(playlist_id)
+            playlist_tracks_data = self.session.get_chart_tracks(playlist_id)
+        else:
+            playlist_data = self.session.get_playlist(playlist_id)
+            playlist_tracks_data = self.session.get_playlist_tracks(playlist_id)
 
         cache = {'data': {}}
-        total_tracks = len(playlist_tracks.get('results'))
 
-        for i, track in enumerate(playlist_tracks.get('results')):
+        # now fetch all the found total_items
+        if is_chart:
+            playlist_tracks = playlist_tracks_data.get('results')
+        else:
+            playlist_tracks = [t.get('track') for t in playlist_tracks_data.get('results')]
+
+        total_tracks = playlist_tracks_data.get('count')
+        for page in range(2, total_tracks // 100 + 2):
+            print(f'Fetching {len(playlist_tracks)}/{total_tracks}', end='\r')
+            # get the DJ chart or user playlist
+            if is_chart:
+                playlist_tracks += self.session.get_chart_tracks(playlist_id, page=page).get('results')
+            else:
+                # unfold the track element
+                playlist_tracks += [t.get('track')
+                                    for t in self.session.get_playlist_tracks(playlist_id, page=page).get('results')]
+
+        for i, track in enumerate(playlist_tracks):
             # add the track numbers
             track['track_number'] = i + 1
             track['total_tracks'] = total_tracks
             # add the modified track to the track_extra_kwargs
             cache['data'][track.get('id')] = track
 
+        creator = 'User'
+        if is_chart:
+            creator = playlist_data.get('person').get('owner_name') if playlist_data.get('person') else 'Beatport'
+            release_year = playlist_data.get('change_date')[:4] if playlist_data.get('change_date') else None
+            cover_url = playlist_data.get('image').get('uri')
+        else:
+            release_year = playlist_data.get('updated_date')[:4] if playlist_data.get('updated_date') else None
+            # always get the first image of the four total images
+            cover_url = playlist_data.get('release_images')[0]
+
         return PlaylistInfo(
             name=playlist_data.get('name'),
-            creator=playlist_data.get('person').get('owner_name') if playlist_data.get('person') else 'Beatport',
-            release_year=playlist_data.get('change_date')[:4] if playlist_data.get('change_date') else None,
-            tracks=[t.get('id') for t in playlist_tracks.get('results')],
-            cover_url=playlist_data.get('image').get('uri'),
+            creator=creator,
+            release_year=release_year,
+            duration=sum([t.get('length_ms') // 1000 for t in playlist_tracks]),
+            tracks=[t.get('id') for t in playlist_tracks],
+            cover_url=cover_url,
             track_extra_kwargs=cache
         )
 
-    def get_artist_info(self, artist_id: str, get_credited_albums: bool) -> ArtistInfo:
+    def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False) -> ArtistInfo:
         artist_data = self.session.get_artist(artist_id)
         artist_tracks_data = self.session.get_artist_tracks(artist_id)
 
@@ -216,7 +239,7 @@ class ModuleInterface:
             track_extra_kwargs={'data': {t.get('id'): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, data=None) -> AlbumInfo:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
@@ -228,7 +251,7 @@ class ModuleInterface:
         tracks = tracks_data.get('results')
         total_tracks = tracks_data.get('count')
         for page in range(2, total_tracks // 100 + 2):
-            print(f'Fetching {page * 100}/{total_tracks}', end='\r')
+            print(f'Fetching {len(tracks)}/{total_tracks}', end='\r')
             tracks += self.session.get_release_tracks(album_id, page=page).get('results')
 
         cache = {'data': {album_id: album_data}}
@@ -241,6 +264,8 @@ class ModuleInterface:
         return AlbumInfo(
             name=album_data.get('name'),
             release_year=album_data.get('publish_date')[:4] if album_data.get('publish_date') else None,
+            # sum up all the individual track lengths
+            duration=sum([t.get('length_ms') // 1000 for t in tracks]),
             upc=album_data.get('upc'),
             cover_url=album_data.get('image').get('url'),
             artist=album_data.get('artists')[0].get('name'),
@@ -250,7 +275,7 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
-                       data=None) -> TrackInfo:
+                       data=None, is_chart: bool = False) -> TrackInfo:
         if data is None:
             data = {}
 
@@ -295,6 +320,7 @@ class ModuleInterface:
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=release_year,
+            duration=track_data.get('length_ms') // 1000,
             bitrate=self.quality_parse[quality_tier],
             bit_depth=None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
             cover_url=track_data.get('release').get('image').get('uri'),
@@ -305,6 +331,14 @@ class ModuleInterface:
         )
 
         return track_info
+
+    def get_track_cover(self, track_id: str, cover_options: CoverOptions, data=None) -> CoverInfo:
+        if data is None:
+            data = {}
+
+        track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+
+        return CoverInfo(url=track_data.get('release').get('image').get('uri'), file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
         if self.quality_parse[quality_tier] == 128:
