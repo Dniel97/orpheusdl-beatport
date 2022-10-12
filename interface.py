@@ -185,7 +185,7 @@ class ModuleInterface:
             playlist_tracks = [t.get('track') for t in playlist_tracks_data.get('results')]
 
         total_tracks = playlist_tracks_data.get('count')
-        for page in range(2, total_tracks // 100 + 2):
+        for page in range(2, (total_tracks - 1) // 100 + 2):
             print(f'Fetching {len(playlist_tracks)}/{total_tracks}', end='\r')
             # get the DJ chart or user playlist
             if is_chart:
@@ -282,7 +282,15 @@ class ModuleInterface:
         track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
 
         album_id = track_data.get('release').get('id')
-        album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
+        album_data = {}
+        error = None
+
+        try:
+            album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
+        except ConnectionError as e:
+            # check if the album is region locked
+            if 'Territory Restricted.' in str(e):
+                error = f"Album {album_id} is region locked"
 
         track_name = track_data.get('name')
         track_name += f' ({track_data.get("mix_name")})' if track_data.get("mix_name") else ''
@@ -293,7 +301,7 @@ class ModuleInterface:
         genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genre') else []
 
         tags = Tags(
-            album_artist=album_data.get('artists')[0].get('name'),
+            album_artist=album_data.get('artists', [{}])[0].get('name'),
             track_number=track_data.get('number'),
             total_tracks=album_data.get('track_count'),
             upc=album_data.get('upc'),
@@ -307,7 +315,6 @@ class ModuleInterface:
             }
         )
 
-        error = None
         if not track_data['is_available_for_streaming']:
             error = f'Track "{track_data.get("name")}" is not streamable!'
         elif track_data.get('preorder'):
