@@ -28,6 +28,7 @@ class ModuleInterface:
         self.oprinter = module_controller.printer_controller
         self.print = module_controller.printer_controller.oprint
         self.module_controller = module_controller
+        self.cover_size = module_controller.orpheus_options.default_cover_options.resolution
 
         # LOW = 128kbit/s AAC, MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC,
         self.quality_parse = {
@@ -115,6 +116,22 @@ class ModuleInterface:
             # check if the playlist is a user playlist or DJ charts, only needed for get_playlist_info()
             extra_kwargs={'is_chart': match.group('type') == 'chart'}
         )
+
+    @staticmethod
+    def _generate_artwork_url(cover_url: str, size: int, max_size: int = 1400):
+        # if more than max_size are requested, cap the size at max_size
+        if size > max_size:
+            size = max_size
+
+        # check if it's a dynamic_uri, if not make it one
+        res_pattern = re.compile(r'\d{3,4}x\d{3,4}')
+        match = re.search(res_pattern, cover_url)
+        if match:
+            # replace the hardcoded resolution with dynamic one
+            cover_url = re.sub(res_pattern, '{w}x{h}', cover_url)
+
+        # replace the dynamic_uri h and w parameter with the wanted size
+        return cover_url.format(w=size, h=size)
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 20):
         results = self.session.get_search(query)
@@ -206,10 +223,10 @@ class ModuleInterface:
         if is_chart:
             creator = playlist_data.get('person').get('owner_name') if playlist_data.get('person') else 'Beatport'
             release_year = playlist_data.get('change_date')[:4] if playlist_data.get('change_date') else None
-            cover_url = playlist_data.get('image').get('uri')
+            cover_url = playlist_data.get('image').get('dynamic_uri')
         else:
             release_year = playlist_data.get('updated_date')[:4] if playlist_data.get('updated_date') else None
-            # always get the first image of the four total images
+            # always get the first image of the four total images, why is there no dynamic_uri available? Annoying
             cover_url = playlist_data.get('release_images')[0]
 
         return PlaylistInfo(
@@ -218,7 +235,7 @@ class ModuleInterface:
             release_year=release_year,
             duration=sum([t.get('length_ms') // 1000 for t in playlist_tracks]),
             tracks=[t.get('id') for t in playlist_tracks],
-            cover_url=cover_url,
+            cover_url=self._generate_artwork_url(cover_url, self.cover_size),
             track_extra_kwargs=cache
         )
 
@@ -267,7 +284,7 @@ class ModuleInterface:
             # sum up all the individual track lengths
             duration=sum([t.get('length_ms') // 1000 for t in tracks]),
             upc=album_data.get('upc'),
-            cover_url=album_data.get('image').get('url'),
+            cover_url=self._generate_artwork_url(album_data.get('image').get('dynamic_uri'), self.cover_size),
             artist=album_data.get('artists')[0].get('name'),
             artist_id=album_data.get('artists')[0].get('id'),
             tracks=[t.get('id') for t in tracks],
@@ -330,7 +347,8 @@ class ModuleInterface:
             duration=track_data.get('length_ms') // 1000,
             bitrate=self.quality_parse[quality_tier],
             bit_depth=None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
-            cover_url=track_data.get('release').get('image').get('uri'),
+            cover_url=self._generate_artwork_url(
+                track_data.get('release').get('image').get('dynamic_uri'), self.cover_size),
             tags=tags,
             codec=CodecEnum.AAC,
             download_extra_kwargs={'track_id': track_id, 'quality_tier': quality_tier},
@@ -344,8 +362,11 @@ class ModuleInterface:
             data = {}
 
         track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+        cover_url = track_data.get('release').get('image').get('dynamic_uri')
 
-        return CoverInfo(url=track_data.get('release').get('image').get('uri'), file_type=ImageFileTypeEnum.jpg)
+        return CoverInfo(
+            url=self._generate_artwork_url(cover_url, cover_options.resolution),
+            file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
         if self.quality_parse[quality_tier] == 128:

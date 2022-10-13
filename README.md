@@ -74,6 +74,10 @@ loaded module. You'll find the configuration file here: `config/settings.json`
         // ...
         "download_quality": "high"
     },
+    "covers": {
+        "main_resolution": 1400,
+        // ...
+    },
     // ...
 }
 ```
@@ -86,7 +90,8 @@ loaded module. You'll find the configuration file here: `config/settings.json`
 * "low": same as minimum
 * "minimum": AAC 128 kbit/s
 
-`main_resolution`: Beatport only supports 1400x1400px covers? So this setting is not working atm.
+`main_resolution`: Beatport supports resolutions from 100x100px to 1400x1400px max.
+A value greater than `1400` is clamped at `1400` so that the cover is not scaled up.
 
 ### Beatport
 ```json
