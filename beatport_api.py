@@ -104,6 +104,15 @@ class BeatportApi:
             'per_page': per_page
         })
 
+    def get_playlist(self, playlist_id: str):
+        return self._get(f'catalog/playlists/{playlist_id}')
+
+    def get_playlist_tracks(self, playlist_id: str, page: int = 1, per_page: int = 100):
+        return self._get(f'catalog/playlists/{playlist_id}/tracks', params={
+            'page': page,
+            'per_page': per_page
+        })
+
     def get_chart(self, chart_id: str):
         return self._get(f'catalog/charts/{chart_id}')
 
