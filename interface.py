@@ -321,7 +321,7 @@ class ModuleInterface:
         if track_data.get('bpm'):
             extra_tags['BPM'] = track_data.get('bpm')
         if track_data.get('key'):
-            extra_tags['Key'] = track_data.get('key')
+            extra_tags['Key'] = track_data.get('key').get('name')
 
         tags = Tags(
             album_artist=album_data.get('artists', [{}])[0].get('name'),
@@ -332,6 +332,7 @@ class ModuleInterface:
             genres=genres,
             release_date=track_data.get('publish_date'),
             copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
+            label=track_data.get('release').get('label').get('name'),
             extra_tags=extra_tags
         )
 
