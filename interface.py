@@ -317,6 +317,12 @@ class ModuleInterface:
         # check if a second genre exists
         genres += [track_data.get('sub_genre').get('name')] if track_data.get('sub_genre') else []
 
+        extra_tags = {}
+        if track_data.get('bpm'):
+            extra_tags['BPM'] = track_data.get('bpm')
+        if track_data.get('key'):
+            extra_tags['Key'] = track_data.get('key').get('name')
+
         tags = Tags(
             album_artist=album_data.get('artists', [{}])[0].get('name'),
             track_number=track_data.get('number'),
@@ -326,10 +332,8 @@ class ModuleInterface:
             genres=genres,
             release_date=track_data.get('publish_date'),
             copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
-            extra_tags={
-                'BPM': track_data.get('bpm'),
-                'Key': track_data.get('key').get('name')
-            }
+            label=track_data.get('release').get('label').get('name'),
+            extra_tags=extra_tags
         )
 
         if not track_data['is_available_for_streaming']:
