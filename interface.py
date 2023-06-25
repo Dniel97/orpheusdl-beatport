@@ -14,7 +14,7 @@ module_information = ModuleInformation(
     module_supported_modes=ModuleModes.download | ModuleModes.covers,
     session_settings={'username': '', 'password': ''},
     session_storage_variables=['access_token', 'refresh_token', 'expires'],
-    netlocation_constant='beatport',
+    netlocation_constant=['beatport', 'crates'],
     url_decoding=ManualEnum.manual,
     test_url='https://www.beatport.com/track/darkside/10844269'
 )
@@ -98,7 +98,7 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        match = re.search(r"https?://(www.)?beatport.com/(?P<type>track|release|artist|playlists|chart)/"
+        match = re.search(r"https?://(www.)?(beatport|crates).co(m)?/(?P<type>track|release|artist|playlists|chart)/"
                           r".+?/(?P<id>\d+)", link)
 
         # so parse the regex "match" to the actual DownloadTypeEnum
