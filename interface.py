@@ -74,7 +74,7 @@ class ModuleInterface:
         self.module_controller.temporary_settings_controller.set('access_token', self.session.access_token)
         self.module_controller.temporary_settings_controller.set('refresh_token', self.session.refresh_token)
         self.module_controller.temporary_settings_controller.set('expires', self.session.expires)
-            
+
     def login(self, email: str, password: str):
         logging.debug(f'Beatport: no session found, login')
         login_data = self.session.auth(email, password)
@@ -98,8 +98,11 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        match = re.search(r"https?://(www.)?(beatport|crates).co(m)?/(?P<type>track|release|artist|playlists|chart)/"
-                          r".+?/(?P<id>\d+)", link)
+        match = re.search(
+            r"https?://(www.)?(beatport|crates).co(m)?/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlists|chart)/"
+            r".+?/(?P<id>\d+)",
+            link,
+        )
 
         # so parse the regex "match" to the actual DownloadTypeEnum
         media_types = {
