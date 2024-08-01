@@ -98,8 +98,8 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        match = re.search(r"https?://(www.)?beatport.com/(?P<type>track|release|artist|playlists|chart)/"
-                          r".+?/(?P<id>\d+)", link)
+        match = re.search(r"https?://(www.)?beatport.com/(?:[a-z]{2}/)"
+                          r"?(?P<type>track|release|artist|playlists|chart)/.+?/(?P<id>\d+)", link)
 
         # so parse the regex "match" to the actual DownloadTypeEnum
         media_types = {
@@ -233,7 +233,7 @@ class ModuleInterface:
             name=playlist_data.get('name'),
             creator=creator,
             release_year=release_year,
-            duration=sum([t.get('length_ms') // 1000 for t in playlist_tracks]),
+            duration=sum([t.get('length_ms', 0) // 1000 for t in playlist_tracks]),
             tracks=[t.get('id') for t in playlist_tracks],
             cover_url=self._generate_artwork_url(cover_url, self.cover_size),
             track_extra_kwargs=cache
