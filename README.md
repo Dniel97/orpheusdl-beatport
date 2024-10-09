@@ -84,7 +84,7 @@ loaded module. You'll find the configuration file here: `config/settings.json`
 
 `download_quality`: Choose one of the following settings:
 * "hifi": same as lossless
-* "lossless": same as high
+* "lossless": FLAC 16-bit 44.1kHz
 * "high": AAC 256 kbit/s
 * "medium": same as low
 * "low": same as minimum
