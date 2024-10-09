@@ -342,6 +342,13 @@ class ModuleInterface:
         elif track_data.get('preorder'):
             error = f'Track "{track_data.get("name")}" is not yet released!'
 
+        quality = self.quality_parse[quality_tier]
+        bitrate = {
+            "lossless": 1411,
+            "high": 256,
+            "medium": 128,
+        }
+
         track_info = TrackInfo(
             name=track_name,
             album=album_data.get('name'),
@@ -349,9 +356,10 @@ class ModuleInterface:
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=release_year,
-            duration=track_data.get('length_ms') // 1000,
-            bitrate=self.quality_parse[quality_tier],
-            bit_depth=None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
+            duration=track_data.get('length_ms', 0) // 1000,
+            bitrate=bitrate[quality],
+            bit_depth=16 if quality == "lossless" else None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
+            sample_rate=44.1,
             cover_url=self._generate_artwork_url(
                 track_data.get('release').get('image').get('dynamic_uri'), self.cover_size),
             tags=tags,
