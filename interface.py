@@ -323,18 +323,19 @@ class ModuleInterface:
         if track_data.get('key'):
             extra_tags['Key'] = track_data.get('key').get('name')
 
-        tags = Tags(
-            album_artist=album_data.get('artists', [{}])[0].get('name'),
-            track_number=track_data.get('number'),
-            total_tracks=album_data.get('track_count'),
-            upc=album_data.get('upc'),
-            isrc=track_data.get('isrc'),
-            genres=genres,
-            release_date=track_data.get('publish_date'),
-            copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
-            label=track_data.get('release').get('label').get('name'),
-            extra_tags=extra_tags
-        )
+        # tags = Tags(
+        #     album_artist=album_data.get('artists', [{}])[0].get('name'),
+        #     track_number=track_data.get('number'),
+        #     total_tracks=album_data.get('track_count'),
+        #     upc=album_data.get('upc'),
+        #     isrc=track_data.get('isrc'),
+        #     genres=genres,
+        #     release_date=track_data.get('publish_date'),
+        #     copyright=f'© {release_year} {track_data.get("release").get("label").get("name")}',
+        #     label=track_data.get('release').get('label').get('name'),
+        #     extra_tags=extra_tags
+        # )
+        tags = Tags()
 
         if not track_data['is_available_for_streaming']:
             error = f'Track "{track_data.get("name")}" is not streamable!'
