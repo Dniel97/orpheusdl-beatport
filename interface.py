@@ -347,6 +347,7 @@ class ModuleInterface:
             "high": 256,
             "medium": 128,
         }
+        length_ms = track_data.get('length_ms')
 
         track_info = TrackInfo(
             name=track_name,
@@ -355,7 +356,7 @@ class ModuleInterface:
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=release_year,
-            duration=track_data.get('length_ms', 0) // 1000,
+            duration=length_ms // 1000 if length_ms else None,
             bitrate=bitrate[quality],
             bit_depth=16 if quality == "lossless" else None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
             sample_rate=44.1,
