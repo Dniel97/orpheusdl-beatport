@@ -32,12 +32,12 @@ class ModuleInterface:
 
         # LOW = 128kbit/s AAC, MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC,
         self.quality_parse = {
-            QualityEnum.MINIMUM: 128,
-            QualityEnum.LOW: 128,
-            QualityEnum.MEDIUM: 128,
-            QualityEnum.HIGH: 256,
-            QualityEnum.LOSSLESS: 256,
-            QualityEnum.HIFI: 256
+            QualityEnum.MINIMUM: "medium",
+            QualityEnum.LOW: "medium",
+            QualityEnum.MEDIUM: "medium",
+            QualityEnum.HIGH: "high",
+            QualityEnum.LOSSLESS: "lossless",
+            QualityEnum.HIFI: "lossless"
         }
 
         self.session = BeatportApi()
@@ -341,6 +341,14 @@ class ModuleInterface:
         elif track_data.get('preorder'):
             error = f'Track "{track_data.get("name")}" is not yet released!'
 
+        quality = self.quality_parse[quality_tier]
+        bitrate = {
+            "lossless": 1411,
+            "high": 256,
+            "medium": 128,
+        }
+        length_ms = track_data.get('length_ms')
+
         track_info = TrackInfo(
             name=track_name,
             album=album_data.get('name'),
@@ -348,13 +356,14 @@ class ModuleInterface:
             artists=[a.get('name') for a in track_data.get('artists')],
             artist_id=track_data.get('artists')[0].get('id'),
             release_year=release_year,
-            duration=track_data.get('length_ms') // 1000,
-            bitrate=self.quality_parse[quality_tier],
-            bit_depth=None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
+            duration=length_ms // 1000 if length_ms else None,
+            bitrate=bitrate[quality],
+            bit_depth=16 if quality == "lossless" else None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
+            sample_rate=44.1,
             cover_url=self._generate_artwork_url(
                 track_data.get('release').get('image').get('dynamic_uri'), self.cover_size),
             tags=tags,
-            codec=CodecEnum.AAC,
+            codec=CodecEnum.AAC if quality_tier not in {QualityEnum.HIFI, QualityEnum.LOSSLESS} else CodecEnum.FLAC,
             download_extra_kwargs={'track_id': track_id, 'quality_tier': quality_tier},
             error=error
         )
@@ -373,37 +382,12 @@ class ModuleInterface:
             file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
-        if self.quality_parse[quality_tier] == 128:
-            # get the HLS 128k playlist from the API
-            stream_data = self.session.get_track_stream(track_id)
+        stream_data = self.session.get_track_download(track_id, self.quality_parse[quality_tier])
 
-            if not stream_data.get('stream_url'):
-                raise self.exception('Could not get 128k HLS stream, exiting')
+        if not stream_data.get('location'):
+            raise self.exception('Could not get stream, exiting')
 
-            # HLS
-            temp_location = create_temp_filename() + '.mp4'
-
-            if not shutil.which("ffmpeg"):
-                raise self.exception('FFmpeg is not installed or working, but FFmpeg is required, exiting')
-
-            ffmpeg.input(stream_data.get('stream_url'), hide_banner=None, y=None).output(temp_location, acodec='copy',
-                                                                                         loglevel='error').run()
-
-            # return the MP4 temp file, but tell orpheus to change the container to .m4a (AAC)
-            return TrackDownloadInfo(
-                download_type=DownloadEnum.TEMP_FILE_PATH,
-                temp_file_path=temp_location
-            )
-
-        elif self.quality_parse[quality_tier] == 256:
-            # get the MP4 256k from the API
-            stream_data = self.session.get_track_download(track_id)
-
-            if not stream_data.get('location'):
-                raise self.exception('Could not get 256k MP4 stream, exiting')
-
-            # return the MP4 URL
-            return TrackDownloadInfo(
-                download_type=DownloadEnum.URL,
-                file_url=stream_data.get('location')
-            )
+        return TrackDownloadInfo(
+            download_type=DownloadEnum.URL,
+            file_url=stream_data.get('location')
+        )
