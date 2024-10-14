@@ -144,6 +144,6 @@ class BeatportApi:
         # get the 128k stream (.m3u8) for a given track id from needledrop.beatport.com
         return self._get(f'catalog/tracks/{track_id}/stream')
 
-    def get_track_download(self, track_id: str):
+    def get_track_download(self, track_id: str, quality: str):
         # get the 256k stream (.mp4) for a given track id
-        return self._get(f'catalog/tracks/{track_id}/download')
+        return self._get(f'catalog/tracks/{track_id}/download', params={'quality': quality})
