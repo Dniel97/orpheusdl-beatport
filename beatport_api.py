@@ -19,7 +19,7 @@ class BeatportApi:
 
     def headers(self, use_access_token: bool = False):
         return {
-            'user-agent': 'libbeatport/v2.4.1-8-g1e7ba687a',
+            #'user-agent': 'libbeatport/v2.4.1-8-g1e7ba687a',
             'authorization': f'Bearer {self.access_token}' if use_access_token else None,
             # 'X-LINK-DEVICE-ID': str(uuid.uuid4()),
         }
@@ -27,8 +27,8 @@ class BeatportApi:
     def auth(self, username: str, password: str) -> dict:
         r = self.s.post(f'{self.API_URL}auth/o/token/', data={
             'client_id': self.client_id,
-            'client_secret': '7oBWZwYOia9u4yblRmVTTet5sficrN7xbbCglbmRxoN08ShlpxyXbixLeov2wC62R3WsD2dxSTwLosi71FqpfLS'
-                             'OKnFSZ4FTXoayHNLHpWz7XcmyOMiLkqnbTPk2kI9L',
+            #'client_secret': '7oBWZwYOia9u4yblRmVTTet5sficrN7xbbCglbmRxoN08ShlpxyXbixLeov2wC62R3WsD2dxSTwLosi71FqpfLS'
+            #                 'OKnFSZ4FTXoayHNLHpWz7XcmyOMiLkqnbTPk2kI9L',
             'username': username,
             'password': password,
             'grant_type': 'password',
