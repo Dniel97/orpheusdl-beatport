@@ -83,9 +83,9 @@ loaded module. You'll find the configuration file here: `config/settings.json`
 ```
 
 `download_quality`: Choose one of the following settings:
-* "hifi": same as lossless
-* "lossless": FLAC 16-bit 44.1kHz
-* "high": AAC 256 kbit/s
+* "hifi": same as lossless (only Beatport Streaming Professional)
+* "lossless": FLAC 16-bit 44.1kHz (only Beatport Streaming Professional)
+* "high": AAC 256 kbit/s (only Beatport Streaming Professional)
 * "medium": same as low
 * "low": same as minimum
 * "minimum": AAC 128 kbit/s
@@ -106,8 +106,8 @@ A value greater than `1400` is clamped at `1400` so that the cover is not scaled
 | username | Enter your Beatport email/username address here |
 | password | Enter your Beatport password here               |
 
-**NOTE: You need an active "LINK" subscription to use this module. "Professional", formerly known as "LINK Pro" is
-required to get  AAC 256 kbit/s?**
+**NOTE: You need an active "Link" subscription to use this module. "Professional", formerly known as "LINK Pro" is
+required to get  AAC 256 kbit/s.**
 
 <!-- Contact -->
 ## Contact
