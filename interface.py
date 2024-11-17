@@ -1,12 +1,9 @@
 import logging
 import re
-import shutil
-import ffmpeg
 
 from datetime import datetime
 
 from utils.models import *
-from utils.utils import create_temp_filename
 from .beatport_api import BeatportApi
 
 module_information = ModuleInformation(
@@ -30,14 +27,14 @@ class ModuleInterface:
         self.module_controller = module_controller
         self.cover_size = module_controller.orpheus_options.default_cover_options.resolution
 
-        # LOW = 128kbit/s AAC, MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC,
+        # MINIMUM-MEDIUM = 128kbit/s AAC, HIGH = 256kbit/s AAC, LOSSLESS-HIFI = FLAC 44.1/16
         self.quality_parse = {
             QualityEnum.MINIMUM: "medium",
             QualityEnum.LOW: "medium",
             QualityEnum.MEDIUM: "medium",
-            QualityEnum.HIGH: "high",
-            QualityEnum.LOSSLESS: "lossless",
-            QualityEnum.HIFI: "lossless"
+            QualityEnum.HIGH: "medium",
+            QualityEnum.LOSSLESS: "medium",
+            QualityEnum.HIFI: "medium"
         }
 
         self.session = BeatportApi()
@@ -95,6 +92,14 @@ class ModuleInterface:
             account_data = self.session.get_account()
             if not account_data.get('subscription'):
                 raise self.exception('Beatport: Account does not have an active "Link" subscription')
+
+            # Essentials = "bp_basic", Professional = "bp_link_pro"
+            if account_data.get('subscription') == "bp_link_pro":
+                # Pro subscription, set the quality to high and lossless
+                self.print("Beatport: Professional subscription detected, allowing high and lossless quality")
+                self.quality_parse[QualityEnum.HIGH] = "high"
+                self.quality_parse[QualityEnum.HIFI] = "lossless"
+                self.quality_parse[QualityEnum.LOSSLESS] = "lossless"
 
     @staticmethod
     def custom_url_parse(link: str):
@@ -319,7 +324,7 @@ class ModuleInterface:
 
         extra_tags = {}
         if track_data.get('bpm'):
-            extra_tags['BPM'] = track_data.get('bpm')
+            extra_tags['BPM'] = str(track_data.get('bpm'))
         if track_data.get('key'):
             extra_tags['Key'] = track_data.get('key').get('name')
 
@@ -363,7 +368,7 @@ class ModuleInterface:
             cover_url=self._generate_artwork_url(
                 track_data.get('release').get('image').get('dynamic_uri'), self.cover_size),
             tags=tags,
-            codec=CodecEnum.AAC if quality_tier not in {QualityEnum.HIFI, QualityEnum.LOSSLESS} else CodecEnum.FLAC,
+            codec=CodecEnum.FLAC if quality == "lossless" else CodecEnum.AAC,
             download_extra_kwargs={'track_id': track_id, 'quality_tier': quality_tier},
             error=error
         )
