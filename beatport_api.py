@@ -3,12 +3,19 @@ from datetime import timedelta, datetime
 from utils.utils import create_requests_session
 
 
+class BeatportError(Exception):
+    def __init__(self, message):
+        self.message = message
+        super(BeatportError, self).__init__(message)
+
+
 class BeatportApi:
     def __init__(self):
-        self.API_URL = 'https://api.beatport.com/v4/'
+        self.API_URL = "https://api.beatport.com/v4/"
 
-        # client id from the Beatport android app
-        self.client_id = 'nBQh4XCUqE0cpoy609mC8GoyjCcJHBwbI374FYmE'
+        # client id from Serato DJ Lite
+        self.client_id = "Zy2K9Wvy6DkUds7g8s1GNMHfk17E5Ch2BWHlyaGY"
+        self.redirect_uri = "seratodjlite://beatport"
 
         self.access_token = None
         self.refresh_token = None
@@ -19,23 +26,57 @@ class BeatportApi:
 
     def headers(self, use_access_token: bool = False):
         return {
-            'user-agent': 'libbeatport/v2.4.1-8-g1e7ba687a',
+            'user-agent': 'libbeatport/v2.8.2',
             'authorization': f'Bearer {self.access_token}' if use_access_token else None,
-            # 'X-LINK-DEVICE-ID': str(uuid.uuid4()),
         }
 
     def auth(self, username: str, password: str) -> dict:
-        r = self.s.post(f'{self.API_URL}auth/o/token/', data={
-            'client_id': self.client_id,
-            'client_secret': '7oBWZwYOia9u4yblRmVTTet5sficrN7xbbCglbmRxoN08ShlpxyXbixLeov2wC62R3WsD2dxSTwLosi71FqpfLS'
-                             'OKnFSZ4FTXoayHNLHpWz7XcmyOMiLkqnbTPk2kI9L',
-            'username': username,
-            'password': password,
-            'grant_type': 'password',
+        acc_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/131.0.0.0 Safari/537.36",
+        }
+
+        # authorize the code_challenge
+        r = self.s.get(f"{self.API_URL}auth/o/authorize/", params={
+            "client_id": self.client_id,
+            "response_type": "code",
+            "redirect_uri": self.redirect_uri,
+        }, headers=acc_headers, allow_redirects=False)
+
+        if r.status_code != 302:
+            raise ConnectionError(r.text)
+
+        r = self.s.post(f"{self.API_URL}auth/login/", json={
+            "username": username,
+            "password": password,
+        }, headers=acc_headers)
+
+        if r.status_code != 200:
+            raise ConnectionError(r.text)
+
+        # get the code from the redirect url, that's why redirect is disabled
+        r = self.s.get(f"{self.API_URL}auth/o/authorize/", params={
+            "client_id": self.client_id,
+            "response_type": "code",
+            "redirect_uri": self.redirect_uri,
+        }, headers=acc_headers, allow_redirects=False)
+
+        if r.status_code != 302:
+            raise ConnectionError(r.text)
+
+        # get the code from the redirect url
+        code = r.headers['location'].split('code=')[1]
+
+        # exchange the code for the access_token, refresh_token and expires_in
+        r = self.s.post(f"{self.API_URL}auth/o/token/", data={
+            "client_id": self.client_id,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": self.redirect_uri,
         })
 
         if r.status_code != 200:
-            return r.json()
+            raise ConnectionError(r.text)
 
         # convert to JSON
         r = r.json()
@@ -83,6 +124,11 @@ class BeatportApi:
         # access_token expired
         if r.status_code == 401:
             raise ValueError(r.text)
+
+        # check if territory is not allowed
+        if r.status_code == 403:
+            if "Territory" in r.json().get("detail", ""):
+                raise BeatportError("region locked")
 
         if r.status_code not in {200, 201, 202}:
             raise ConnectionError(r.text)
