@@ -4,7 +4,8 @@ import re
 from datetime import datetime
 
 from utils.models import *
-from .beatport_api import BeatportApi
+from utils.models import AlbumInfo
+from .beatport_api import BeatportApi, BeatportError
 
 module_information = ModuleInformation(
     service_name='Beatport',
@@ -261,12 +262,17 @@ class ModuleInterface:
             track_extra_kwargs={'data': {t.get('id'): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo or None:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
 
-        album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
+        try:
+            album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
+        except BeatportError as e:
+            self.print(f'Beatport: Album {album_id} is {str(e)}')
+            return
+
         tracks_data = self.session.get_release_tracks(album_id)
 
         # now fetch all the found total_items
@@ -293,7 +299,7 @@ class ModuleInterface:
             artist=album_data.get('artists')[0].get('name'),
             artist_id=album_data.get('artists')[0].get('id'),
             tracks=[t.get('id') for t in tracks],
-            track_extra_kwargs=cache
+            track_extra_kwargs=cache,
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,

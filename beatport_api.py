@@ -6,6 +6,12 @@ from datetime import timedelta, datetime
 from utils.utils import create_requests_session
 
 
+class BeatportError(Exception):
+    def __init__(self, message):
+        self.message = message
+        super(BeatportError, self).__init__(message)
+
+
 class BeatportApi:
     def __init__(self):
         self.API_URL = "https://api.beatport.com/v4/"
@@ -130,6 +136,11 @@ class BeatportApi:
         # access_token expired
         if r.status_code == 401:
             raise ValueError(r.text)
+
+        # check if territory is not allowed
+        if r.status_code == 403:
+            if "Territory" in r.json().get("detail", ""):
+                raise BeatportError("region locked")
 
         if r.status_code not in {200, 201, 202}:
             raise ConnectionError(r.text)
