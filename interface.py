@@ -333,6 +333,8 @@ class ModuleInterface:
             extra_tags["BPM"] = str(track_data.get("bpm"))
         if track_data.get("key"):
             extra_tags["Key"] = track_data.get("key").get("name")
+        if track_data.get("catalog_number"):
+            extra_tags["Catalog number"] = track_data.get("catalog_number")
 
         tags = Tags(
             album_artist=album_data.get("artists", [{}])[0].get("name"),
