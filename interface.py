@@ -239,7 +239,7 @@ class ModuleInterface:
             name=playlist_data.get("name"),
             creator=creator,
             release_year=release_year,
-            duration=sum([t.get("length_ms", 0) // 1000 for t in playlist_tracks]),
+            duration=sum([(t.get("length_ms") or 0) // 1000 for t in playlist_tracks]),
             tracks=[t.get("id") for t in playlist_tracks],
             cover_url=self._generate_artwork_url(cover_url, self.cover_size),
             track_extra_kwargs=cache
