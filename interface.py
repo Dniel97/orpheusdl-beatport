@@ -10,6 +10,7 @@ from .beatport_api import BeatportApi, BeatportError
 module_information = ModuleInformation(
     service_name="Beatport",
     module_supported_modes=ModuleModes.download | ModuleModes.covers,
+    login_behaviour=ManualEnum.manual,
     session_settings={"username": "", "password": ""},
     session_storage_variables=["access_token", "refresh_token", "expires"],
     netlocation_constant="beatport",
@@ -49,15 +50,28 @@ class ModuleInterface:
 
         if session["refresh_token"] is None:
             # old beatport version with cookies and no refresh token, trigger login manually
-            self.login(module_controller.module_settings["username"], module_controller.module_settings["password"])
+            session = self.login(module_controller.module_settings["username"],
+                                 module_controller.module_settings["password"])
 
         if session["refresh_token"] is not None and datetime.now() > session["expires"]:
             # access token expired, get new refresh token
-            self.refresh_token()
+            self.refresh_login()
 
         self.valid_account()
 
-    def refresh_token(self):
+    def _save_session(self) -> dict:
+        # save the new access_token, refresh_token and expires in the temporary settings
+        self.module_controller.temporary_settings_controller.set("access_token", self.session.access_token)
+        self.module_controller.temporary_settings_controller.set("refresh_token", self.session.refresh_token)
+        self.module_controller.temporary_settings_controller.set("expires", self.session.expires)
+
+        return {
+            "access_token": self.session.access_token,
+            "refresh_token": self.session.refresh_token,
+            "expires": self.session.expires
+        }
+
+    def refresh_login(self):
         logging.debug(f"Beatport: access_token expired, getting a new one")
 
         # get a new access_token and refresh_token from the API
@@ -68,10 +82,7 @@ class ModuleInterface:
                        self.module_controller.module_settings["password"])
             return
 
-        # save the new access_token, refresh_token and expires in the temporary settings
-        self.module_controller.temporary_settings_controller.set("access_token", self.session.access_token)
-        self.module_controller.temporary_settings_controller.set("refresh_token", self.session.refresh_token)
-        self.module_controller.temporary_settings_controller.set("expires", self.session.expires)
+        self._save_session()
             
     def login(self, email: str, password: str):
         logging.debug(f"Beatport: no session found, login")
@@ -80,12 +91,9 @@ class ModuleInterface:
         if login_data.get("error_description") is not None:
             raise self.exception(login_data.get("error_description"))
 
-        # save the new access_token, refresh_token and expires in the temporary settings
-        self.module_controller.temporary_settings_controller.set("access_token", self.session.access_token)
-        self.module_controller.temporary_settings_controller.set("refresh_token", self.session.refresh_token)
-        self.module_controller.temporary_settings_controller.set("expires", self.session.expires)
-
         self.valid_account()
+
+        return self._save_session()
 
     def valid_account(self):
         if not self.disable_subscription_check:
