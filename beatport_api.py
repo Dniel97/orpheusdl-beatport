@@ -41,13 +41,14 @@ class BeatportApi:
             "client_id": self.client_id,
             "response_type": "code",
             "redirect_uri": self.redirect_uri,
-        }, headers=acc_headers)
+        }, headers=acc_headers, allow_redirects=False)
 
-        if r.status_code != 200:
+        if r.status_code != 302:
             raise ConnectionError(r.text)
 
         # get the referer url from the last request
-        referer = r.url
+        base_url = r.request.url.replace(r.request.path_url, '')
+        referer = base_url + r.headers['location']
 
         r = self.s.post(f"{self.API_URL}auth/login/", json={
             "username": username,
