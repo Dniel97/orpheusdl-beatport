@@ -110,10 +110,9 @@ class ModuleInterface:
                 self.quality_parse[QualityEnum.HIFI] = "lossless"
                 self.quality_parse[QualityEnum.LOSSLESS] = "lossless"
 
-    @staticmethod
-    def custom_url_parse(link: str):
+    def custom_url_parse(self, link: str):
         match = re.search(r"https?://(www.)?beatport.com/(?:[a-z]{2}/)?.*?"
-                          r"(?P<type>track|release|artist|playlists|chart)/.*?/?(?P<id>\d+)", link)
+                          r"(?P<type>track|release|artist|playlists|chart)/.*?/?(?P<id>\d{3,})", link)
 
         # so parse the regex "match" to the actual DownloadTypeEnum
         media_types = {
@@ -123,6 +122,10 @@ class ModuleInterface:
             "playlists": DownloadTypeEnum.playlist,
             "chart": DownloadTypeEnum.playlist
         }
+
+        if not match:
+            self.print(f"Beatport: URL {link} is not supported")
+            exit()
 
         return MediaIdentification(
             media_type=media_types[match.group("type")],
