@@ -220,6 +220,10 @@ class ModuleInterface:
 
     @staticmethod
     def _generate_artwork_url(cover_url: str, size: int, max_size: int = 1400):
+        # Handle None or empty strings safely
+        if not cover_url or not isinstance(cover_url, str):
+            return None
+
         # if more than max_size are requested, cap the size at max_size
         if size > max_size:
             size = max_size
@@ -232,7 +236,10 @@ class ModuleInterface:
             cover_url = re.sub(res_pattern, "{w}x{h}", cover_url)
 
         # replace the dynamic_uri h and w parameter with the wanted size
-        return cover_url.format(w=size, h=size)
+        try:
+            return cover_url.format(w=size, h=size)
+        except (KeyError, ValueError):
+            return cover_url
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 20):
         # map query types to API search types
@@ -252,19 +259,27 @@ class ModuleInterface:
 
         # perform search with type if supported, otherwise fall back to general search
         if search_type:
-            results = self.session.get_search(query=query, search_type=search_type, per_page=limit)
-            result_list = results.get(search_type, [])
+            if query_type is DownloadTypeEnum.playlist:
+                # Fetch both charts and user playlists
+                res_charts = self.session.get_search(query=query, search_type="charts", per_page=limit)
+                res_playlists = self.session.get_search(query=query, search_type="playlists", per_page=limit)
+                result_list = res_charts.get("charts", []) + res_playlists.get("playlists", [])
+            else:
+                results = self.session.get_search(query=query, search_type=search_type, per_page=limit)
+                result_list = results.get(search_type, [])
         else:
             # fall back to general search for unsupported types
             results = self.session.get_search(query)
             name_parse = {
                 "track": "tracks",
                 "album": "releases",
-                "playlist": "charts",
+                "playlist": "charts", # Compatibility: result_list will additionally include 'playlists' below
                 "artist": "artists",
                 "label": "labels"
             }
             result_list = results.get(name_parse.get(query_type.name), [])
+            if query_type is DownloadTypeEnum.playlist:
+                result_list += results.get("playlists", [])
         
         items = []
         for i in result_list:
@@ -276,10 +291,11 @@ class ModuleInterface:
             additional = []
             item_extra_kwargs = {}
             
+            # Identify if it's a chart or a user playlist
+            is_chart = 'publish_date' in i or 'person' in i or 'genres' in i
+            item_extra_kwargs['is_chart'] = is_chart
+
             # Safe handling of image data - handle None values properly
-            # Use smaller size (56px) for search result thumbnails
-            # For tracks: use release.image (album cover), not image (which is waveform)
-            # For other types: use image directly
             if query_type is DownloadTypeEnum.track:
                 release_data = i.get('release') or {}
                 image_data = release_data.get('image') or {}
@@ -310,20 +326,19 @@ class ModuleInterface:
             is_explicit = i.get('explicit', False)
 
             if query_type is DownloadTypeEnum.playlist:
-                item_extra_kwargs['is_chart'] = True # Beatport search for playlists returns charts
-                # Artist parsing for charts
+                # Artist parsing
                 if i.get('artist') and i['artist'].get('name'):
                     artists = [i['artist']['name']]
-                elif i.get('person') and i['person'].get('owner_name'): # Fallback for different structures
+                elif i.get('person') and i['person'].get('owner_name'):
                     artists = [i['person']['owner_name']]
                 else:
-                    artists = ["Beatport"] # Default
-                # Year parsing for charts
+                    artists = ["Beatport"]
+                # Year parsing
                 if i.get("publish_date"):
                     year = i.get("publish_date")[:4]
-                elif i.get("change_date"): # Fallback date field
-                    year = i.get("change_date")[:4]
-                # Track count in additional for charts/playlists
+                elif i.get("created_date"):
+                    year = i.get("created_date")[:4]
+                # Track count
                 if i.get("track_count") is not None:
                     tc = i.get('track_count')
                     additional.append(f"1 track" if tc == 1 else f"{tc} tracks")
@@ -351,21 +366,17 @@ class ModuleInterface:
             elif query_type is DownloadTypeEnum.artist:
                 if i.get("name"):
                     artists = [i.get("name")]
-                # Year is usually not applicable for artist search results directly
                 if i.get("genres"):
                     genre_names = [g.get("name") for g in i.get("genres", []) if g.get("name")]
                     if genre_names:
                         additional.append(", ".join(genre_names))
 
             elif query_type is DownloadTypeEnum.label:
-                # Skip only when API explicitly reports 0 releases (empty label); if count missing, still show
                 rc = i.get("releases_count") or i.get("release_count")
                 if rc is not None and rc == 0:
                     continue
-                # Label: display name as title, use label name as "artist" for consistency
                 if i.get("name"):
                     artists = [i.get("name")]
-                # Year from founded/created if available
                 date_val = i.get("founded") or i.get("created_at") or i.get("founded_date")
                 if date_val and isinstance(date_val, str) and len(date_val) >= 4:
                     year = date_val[:4]
@@ -375,19 +386,21 @@ class ModuleInterface:
                     genre_names = [g.get("name") for g in i.get("genres", []) if g.get("name")]
                     if genre_names:
                         additional.append(", ".join(genre_names))
-                # Releases count in additional when API provides it
                 if rc is not None:
                     additional.append(f"1 release" if rc == 1 else f"{rc} releases")
 
             if i.get("exclusive") is True:
                  additional.append("Exclusive")
 
-            if query_type is DownloadTypeEnum.playlist and (i.get("track_count") is None or i.get("track_count") == 0):
+            if query_type is DownloadTypeEnum.playlist and not is_chart and i.get('track_count') is None:
+                # User playlists from search don't have track_count, we'll fetch it in batch
+                pass
+            elif query_type is DownloadTypeEnum.playlist and (i.get("track_count") is not None and i.get("track_count") == 0):
                 continue
 
-            items.append(SearchResult(
+            item = SearchResult(
                 name=name,
-                artists=artists if artists else ["Unknown Artist"], # Ensure artists list is not empty
+                artists=artists if artists else ["Unknown Artist"],
                 result_id=result_id,
                 year=year,
                 additional=additional if additional else None,
@@ -396,7 +409,86 @@ class ModuleInterface:
                 image_url=image_url,
                 preview_url=preview_url,
                 extra_kwargs=item_extra_kwargs if item_extra_kwargs else {}
-            ))
+            )
+            items.append(item)
+
+        # Batch fetch missing metadata for playlists (User playlists metadata and Chart durations)
+        if query_type == DownloadTypeEnum.playlist:
+            playlists_to_fetch = [t for t in items if not t.extra_kwargs.get('is_chart')]
+            charts_to_fetch = [t for t in items if t.extra_kwargs.get('is_chart') and not t.duration]
+            
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # 1. Fetch full metadata for user playlists
+                if playlists_to_fetch:
+                    def _fetch_playlist_full(pid):
+                        try:
+                            data = self.session.get_playlist(pid)
+                            return pid, data
+                        except: return pid, None
+                    
+                    for pid, data in executor.map(_fetch_playlist_full, [t.result_id for t in playlists_to_fetch]):
+                        if data:
+                            for t in playlists_to_fetch:
+                                if t.result_id == pid:
+                                    # Update fields
+                                    if data.get('track_count') is not None:
+                                        t.additional = [f"1 track" if data['track_count'] == 1 else f"{data['track_count']} tracks"]
+                                    if data.get('length_ms'):
+                                        t.duration = data['length_ms'] // 1000
+                                    
+                                    # Safe access to release images
+                                    rel_images = data.get('release_images')
+                                    if not t.image_url and rel_images and len(rel_images) > 0 and rel_images[0]:
+                                        t.image_url = self._generate_artwork_url(rel_images[0], 56)
+                                    break
+                
+                # 2. Fetch durations for charts
+                if charts_to_fetch:
+                    def _fetch_chart_duration(pid):
+                        try:
+                            tracks_data = self.session.get_chart_tracks(pid, page=1, per_page=100)
+                            if tracks_data and 'results' in tracks_data:
+                                sum_dur = sum((t.get('length_ms') or 0) for t in tracks_data['results'])
+                                return pid, sum_dur // 1000 if sum_dur > 0 else None
+                        except: return pid, None
+                    
+                    for pid, dur in executor.map(_fetch_chart_duration, [t.result_id for t in charts_to_fetch]):
+                        if dur:
+                            for t in charts_to_fetch:
+                                if t.result_id == pid:
+                                    t.duration = dur
+        
+        # Batch fetch durations for albums
+        albums_to_fetch = [t for t in items if query_type == DownloadTypeEnum.album and not t.duration]
+        if albums_to_fetch:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                def _fetch_album_duration(aid):
+                    try:
+                        tracks_data = self.session.get_release_tracks(aid)
+                        if tracks_data and 'results' in tracks_data:
+                            sum_dur = sum((t.get('length_ms') or 0) for t in tracks_data['results'])
+                            return aid, sum_dur // 1000 if sum_dur > 0 else None
+                    except: return aid, None
+                
+                for aid, dur in executor.map(_fetch_album_duration, [t.result_id for t in albums_to_fetch]):
+                    if dur:
+                        for t in albums_to_fetch:
+                            if t.result_id == aid:
+                                t.duration = dur
+                                break
+
+        # 3. Final filtering: Remove any playlists that have no tracks
+        if query_type == DownloadTypeEnum.playlist:
+            # Helper to check for "X tracks" in additional list
+            def _has_tracks(item):
+                if not item.additional: return False
+                # If there's an "X tracks" string, it has tracks
+                return any("track" in str(s) for s in item.additional)
+            
+            items = [t for t in items if _has_tracks(t)]
+
         return items
         
     def get_playlist_info(self, playlist_id: str, is_chart: bool = False, **kwargs) -> PlaylistInfo:
@@ -516,20 +608,75 @@ class ModuleInterface:
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False, **kwargs) -> ArtistInfo:
         artist_data = self.session.get_artist(artist_id)
-        artist_tracks_data = self.session.get_artist_tracks(artist_id)
+        artist_name = artist_data.get("name") or "Unknown Artist"
 
-        # now fetch all the found total_items
-        artist_tracks = artist_tracks_data.get("results") or []
-        total_tracks = artist_tracks_data.get("count") or 0
-        num_pages = max(1, (total_tracks + 99) // 100)
-        for page in range(2, num_pages + 1):
-            self.print(f"Fetching artist tracks (page {page}/{num_pages})...")
-            artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results") or []
-        if num_pages > 1:
-            self.print("")
+        # Fetch artist tracks (paginated)
+        artist_tracks = []
+        try:
+            tracks_data = self.session.get_artist_tracks(artist_id)
+            artist_tracks = list(tracks_data.get("results") or [])
+            total_tracks = tracks_data.get("count") or len(artist_tracks)
+            num_pages = max(1, (total_tracks + 99) // 100)
+            for page in range(2, num_pages + 1):
+                self.print(f"Fetching artist tracks (page {page}/{num_pages})...")
+                artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results") or []
+        except Exception:
+            pass
+
+        # Fetch artist releases (paginated)
+        releases_list = []
+        try:
+            releases_data = self.session.get_artist_releases(artist_id)
+            releases_list = list(releases_data.get("results") or [])
+            total_releases = releases_data.get("count") or len(releases_list)
+            num_pages = max(1, (total_releases + 99) // 100)
+            for page in range(2, num_pages + 1):
+                self.print(f"Fetching artist releases (page {page}/{num_pages})...")
+                releases_list += self.session.get_artist_releases(artist_id, page=page, per_page=100).get("results") or []
+        except Exception:
+            pass
+
+        # Process releases into album dicts for GUI
+        albums_out = []
+        for r in releases_list:
+            rid = str(r.get("id"))
+            # Beatport releases usually have track_count but not duration in discography list
+            tc = r.get("track_count")
+            albums_out.append({
+                'id': rid,
+                'name': r.get("name"),
+                'artist': artist_name,
+                'release_year': str(r.get("new_release_date", ""))[:4] or None,
+                'cover_url': r.get("image", {}).get("uri"),
+                'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
+                'duration': None # Will fetch via batch
+            })
+
+        # Batch fetch missing durations for albums
+        missing_durations = [idx for idx, a in enumerate(albums_out) if a.get('duration') is None]
+        if missing_durations:
+            import concurrent.futures
+            def _fetch_bp_album_duration(aid):
+                try:
+                    # We need to fetch release tracks to sum durations
+                    r_tracks = self.session.get_release_tracks(aid).get("results") or []
+                    total_sec = sum(int(float(t.get("length_ms", 0)) / 1000) for t in r_tracks)
+                    return aid, total_sec or None
+                except: return aid, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                fetch_ids = [albums_out[idx]['id'] for idx in missing_durations]
+                for aid, dur in executor.map(_fetch_bp_album_duration, fetch_ids):
+                    if dur:
+                        for idx in missing_durations:
+                            if albums_out[idx]['id'] == aid:
+                                albums_out[idx]['duration'] = dur
+                                break
 
         return ArtistInfo(
-            name=artist_data.get("name"),
+            name=artist_name,
+            artist_id=artist_id,
+            albums=albums_out,
             tracks=[t.get("id") for t in artist_tracks],
             track_extra_kwargs={"data": {t.get("id"): t for t in artist_tracks}},
         )
@@ -571,6 +718,36 @@ class ModuleInterface:
 
         release_ids = [str(r.get("id")) for r in releases_list if r.get("id") is not None]
         track_ids = [t.get("id") for t in label_tracks if t.get("id") is not None]
+
+        # Batch fetch missing durations for albums (cap to 100 to prevent API rate limits/hanging)
+        missing_durations = [idx for idx, r in enumerate(releases_list) if r.get('duration') is None and r.get('length_ms') is None]
+        missing_durations = missing_durations[:100]
+        if missing_durations:
+            import concurrent.futures
+            def _fetch_bp_album_duration(aid):
+                try:
+                    r_tracks = self.session.get_release_tracks(aid).get("results") or []
+                    total_sec = sum(int(float(t.get("length_ms", 0)) / 1000) for t in r_tracks)
+                    return aid, total_sec or None
+                except: return aid, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                fetch_ids = [str(releases_list[idx]['id']) for idx in missing_durations]
+                future_to_idx = {executor.submit(_fetch_bp_album_duration, fetch_ids[i]): missing_durations[i] for i in range(len(fetch_ids))}
+                completed = 0
+                total = len(future_to_idx)
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    completed += 1
+                    if completed % 10 == 0 or completed == total:
+                        self.print(f"Fetching release durations (page {completed}/{total})...")
+                    try:
+                        aid, dur = future.result()
+                        if dur:
+                            idx = future_to_idx[future]
+                            releases_list[idx]['duration'] = dur
+                    except Exception:
+                        pass
+
         album_data = {str(r.get("id")): r for r in releases_list if r.get("id") is not None}
         track_data = {t.get("id"): t for t in label_tracks if t.get("id") is not None}
 
@@ -685,6 +862,9 @@ class ModuleInterface:
                 (album_data.get("image") or {}).get("dynamic_uri"), self.cover_size) if album_data.get("image") else None,
             artist=album_data.get("artists")[0].get("name"),
             artist_id=album_data.get("artists")[0].get("id"),
+            album_artist=album_data.get("artists")[0].get("name"),
+            label=(album_data.get("label") or {}).get("name"),
+            catalog_number=album_data.get("catalog_number"),
             tracks=[t.get("id") for t in tracks],
             track_extra_kwargs=cache,
         )
@@ -804,6 +984,7 @@ class ModuleInterface:
             release_date=track_data.get("publish_date"),
             copyright=f"© {release_year} {label_data.get('name')}" if label_data.get('name') else None,
             label=label_data.get("name"),
+            catalog_number=track_data.get("catalog_number"),
             extra_tags=extra_tags
         )
 
@@ -844,7 +1025,8 @@ class ModuleInterface:
             codec=CodecEnum.FLAC if quality == "lossless" else CodecEnum.AAC,
             download_extra_kwargs={"track_id": track_id, "quality_tier": quality_tier},
             error=error,
-            preview_url=preview_url
+            preview_url=preview_url,
+            additional=f"{track_data.get('bpm')} BPM" if track_data.get("bpm") else None
         )
 
         return track_info
@@ -860,7 +1042,7 @@ class ModuleInterface:
         cover_url = release_image_data.get("dynamic_uri")
 
         return CoverInfo(
-            url=self._generate_artwork_url(cover_url, cover_options.resolution),
+            url=self._generate_artwork_url(cover_url, cover_options.resolution) if cover_url else None,
             file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
