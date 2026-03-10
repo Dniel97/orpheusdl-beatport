@@ -39,20 +39,27 @@ class BeatportApi:
 
         data = json.loads(match.group(1))
 
-        def find_token(obj):
+        def find_anon_session(obj):
             if isinstance(obj, dict):
+                # Target the specific 'anonSession' object if possible
+                if 'anonSession' in obj and isinstance(obj['anonSession'], dict):
+                    if 'access_token' in obj['anonSession']:
+                        return obj['anonSession']
+                
+                # Check for access_token in the current level as well
                 if 'access_token' in obj:
                     return obj
+                    
                 for k, v in obj.items():
-                    res = find_token(v)
+                    res = find_anon_session(v)
                     if res: return res
             elif isinstance(obj, list):
                 for item in obj:
-                    res = find_token(item)
+                    res = find_anon_session(item)
                     if res: return res
             return None
 
-        token_data = find_token(data)
+        token_data = find_anon_session(data)
         if not token_data or 'access_token' not in token_data:
             raise BeatportError("Could not find anonymous access token on Beatport homepage")
 
@@ -194,6 +201,9 @@ class BeatportApi:
             r = self.s.get(f'{self.API_URL}{endpoint}', params=params, headers=self.headers(use_access_token=True))
 
             if r.status_code == 401:
+                import logging
+                logging.error(f"Beatport API Authentication failed after retry for endpoint: {endpoint}")
+                logging.error(f"  Response: {r.text[:500]}")
                 raise ValueError(f"Authentication failed after retry: {r.text}")
 
         # check if territory is not allowed or other access issues
