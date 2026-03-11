@@ -614,25 +614,46 @@ class ModuleInterface:
         artist_tracks = []
         try:
             tracks_data = self.session.get_artist_tracks(artist_id)
-            artist_tracks = list(tracks_data.get("results") or [])
-            total_tracks = tracks_data.get("count") or len(artist_tracks)
-            num_pages = max(1, (total_tracks + 99) // 100)
-            for page in range(2, num_pages + 1):
-                self.print(f"Fetching artist tracks (page {page}/{num_pages})...")
-                artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results") or []
+            if tracks_data:
+                artist_tracks = list(tracks_data.get("results") or [])
+                total_tracks = tracks_data.get("count") or len(artist_tracks)
+                num_pages = max(1, (total_tracks + 99) // 100)
+                for page in range(2, num_pages + 1):
+                    self.print(f"Fetching artist tracks (page {page}/{num_pages})...")
+                    paged_res = self.session.get_artist_tracks(artist_id, page=page)
+                    artist_tracks += (paged_res.get("results") if paged_res else []) or []
         except Exception:
             pass
+
+        # Build a map of release durations and track counts from fetched tracks to optimize duration fetching
+        release_durations_map = {}
+        release_track_counts_map = {}
+        for t in artist_tracks:
+            if not t: continue
+            release_obj = t.get("release")
+            if release_obj:
+                rid = str(release_obj.get("id"))
+                if rid:
+                    length_ms = t.get("length_ms", 0) or 0
+                    try:
+                        duration_sec = int(float(length_ms) / 1000)
+                        release_durations_map[rid] = release_durations_map.get(rid, 0) + duration_sec
+                        release_track_counts_map[rid] = release_track_counts_map.get(rid, 0) + 1
+                    except (ValueError, TypeError):
+                        pass
 
         # Fetch artist releases (paginated)
         releases_list = []
         try:
             releases_data = self.session.get_artist_releases(artist_id)
-            releases_list = list(releases_data.get("results") or [])
-            total_releases = releases_data.get("count") or len(releases_list)
-            num_pages = max(1, (total_releases + 99) // 100)
-            for page in range(2, num_pages + 1):
-                self.print(f"Fetching artist releases (page {page}/{num_pages})...")
-                releases_list += self.session.get_artist_releases(artist_id, page=page, per_page=100).get("results") or []
+            if releases_data:
+                releases_list = list(releases_data.get("results") or [])
+                total_releases = releases_data.get("count") or len(releases_list)
+                num_pages = max(1, (total_releases + 99) // 100)
+                for page in range(2, num_pages + 1):
+                    self.print(f"Fetching artist releases (page {page}/{num_pages})...")
+                    paged_res = self.session.get_artist_releases(artist_id, page=page, per_page=100)
+                    releases_list += (paged_res.get("results") if paged_res else []) or []
         except Exception:
             pass
 
@@ -642,6 +663,12 @@ class ModuleInterface:
             rid = str(r.get("id"))
             # Beatport releases usually have track_count but not duration in discography list
             tc = r.get("track_count")
+
+            # Optimization: if we already have all tracks for this release from the artist track list, use that duration
+            duration = None
+            if rid in release_track_counts_map and tc == release_track_counts_map[rid]:
+                duration = release_durations_map.get(rid)
+
             albums_out.append({
                 'id': rid,
                 'name': r.get("name"),
@@ -649,7 +676,7 @@ class ModuleInterface:
                 'release_year': str(r.get("new_release_date", ""))[:4] or None,
                 'cover_url': r.get("image", {}).get("uri"),
                 'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
-                'duration': None # Will fetch via batch
+                'duration': duration
             })
 
         # Batch fetch missing durations for albums
@@ -659,12 +686,17 @@ class ModuleInterface:
             def _fetch_bp_album_duration(aid):
                 try:
                     # We need to fetch release tracks to sum durations
-                    r_tracks = self.session.get_release_tracks(aid).get("results") or []
-                    total_sec = sum(int(float(t.get("length_ms", 0)) / 1000) for t in r_tracks)
+                    r_tracks_res = self.session.get_release_tracks(aid)
+                    r_tracks = (r_tracks_res.get("results") if r_tracks_res else []) or []
+                    total_sec = sum(int(float(t.get("length_ms", 0) or 0) / 1000) for t in r_tracks if t)
                     return aid, total_sec or None
                 except: return aid, None
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Cap missing durations to avoid excessive API calls for very large catalogs (max 250 releases)
+            missing_durations = missing_durations[:250]
+            self.print(f"Fetching durations for {len(missing_durations)} releases...")
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 fetch_ids = [albums_out[idx]['id'] for idx in missing_durations]
                 for aid, dur in executor.map(_fetch_bp_album_duration, fetch_ids):
                     if dur:
