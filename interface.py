@@ -102,8 +102,8 @@ class ModuleInterface:
             if not account_data.get("subscription"):
                 raise self.exception("Beatport: Account does not have an active 'Link' subscription")
 
-            # Essentials = "bp_basic", Professional = "bp_link_pro"
-            if account_data.get("subscription") == "bp_link_pro":
+            # Essentials = "bp_basic", Professional = "bp_link_pro", Professional+ = "bp_link_pro_plus_2"
+            if account_data.get("subscription").startswith("bp_link_pro"):
                 # Pro subscription, set the quality to high and lossless
                 self.print("Beatport: Professional subscription detected, allowing high and lossless quality")
                 self.quality_parse[QualityEnum.HIGH] = "high"
